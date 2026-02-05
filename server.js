@@ -22,6 +22,7 @@ const dbConfig = {
   enableKeepAlive: true,
   keepAliveInitialDelay: 0
 };
+
 let pool;
 
 async function initDB() {
@@ -185,7 +186,7 @@ app.post('/api/groups', async (req, res) => {
   const { name, subgroupCount } = req.body;
   const groupId = `g-${Date.now()}`;
   const createdAt = getAdjustedDateTime();
-  const creator = 'system@inspeaker.com.co'; // En versión sin sesión, usamos un fallback o lo pasamos desde el front
+  const creator = 'system@inspeaker.com.co'; 
   try {
     await pool.execute('INSERT INTO analytics_groups (id, name, createdAt, status, created_by) VALUES (?, ?, ?, ?, ?)', [groupId, name, createdAt, 'No Publicado', creator]);
     await logAuditAction('group', groupId, 'CREATE', creator, `Cultura: ${name}`);
@@ -194,6 +195,47 @@ app.post('/api/groups', async (req, res) => {
       await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [sgId, groupId, `Subgrupo ${i + 1}`, creator]);
     }
     res.json({ id: groupId, name, createdAt });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
+  const { subgroupId } = req.params;
+  const { count, expiresAt } = req.body;
+  const creator = 'system@inspeaker.com.co';
+  const createdAt = getAdjustedDateTime();
+  
+  // Temas referentes para la búsqueda aleatoria en Google
+  const topics = [
+    "Metodo Harvard de Negociacion !NSPEAKER",
+    "HumanOS sistema operativo humano Damian Barrios",
+    "Innovacion humana en empresas !NSPEAKER",
+    "Liderazgo transformacional y oratoria inmersiva",
+    "Estrategia de negocios disruptiva !NSPEAKER",
+    "Experiencia como Servicio XaaS !NSPEAKER",
+    "Emprendimiento con proposito HumanOS",
+    "Charlas inmersivas EVVA !NSPEAKER",
+    "Damian Barrios Castillo !NSPEAKER Founder",
+    "Wilson Munive Camargo !NSPEAKER Cofounder"
+  ];
+
+  try {
+    for (let i = 0; i < count; i++) {
+      const linkId = `l-${Date.now()}-${i}`;
+      const shortCode = `INS-${Math.random().toString(36).substring(7).toUpperCase()}`;
+      
+      // Seleccionar un tema aleatorio para el targetUrl
+      const randomTopic = topics[Math.floor(Math.random() * topics.length)];
+      const targetUrl = `https://www.google.com/search?q=${encodeURIComponent(randomTopic)}`;
+      
+      await pool.execute(
+        'INSERT INTO smart_links (id, subgroup_id, label, targetUrl, shortCode, clicks, createdAt, expiresAt, created_by) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)',
+        [linkId, subgroupId, `Link ${i + 1}`, targetUrl, shortCode, createdAt, expiresAt, creator]
+      );
+    }
+    await logAuditAction('subgroup', subgroupId, 'GENERATE_LINKS', creator, `Generados ${count} links con redirección aleatoria`);
+    res.sendStatus(200);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
