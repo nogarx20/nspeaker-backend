@@ -31,21 +31,6 @@ async function initDB() {
     console.log('--- !NSPEAKER REMOTE DATABASE STATUS ---');
     console.log(`CONNECTED TO: ${dbConfig.host}`);
     
-    // MIGRACIÓN AUTOMÁTICA: Asegurar que las columnas existan
-    console.log('Verificando integridad de columnas...');
-    const tables = ['analytics_groups', 'analytics_subgroups', 'smart_links'];
-    for (const table of tables) {
-      try {
-        await connection.query(`ALTER TABLE ${table} ADD COLUMN created_by VARCHAR(255) DEFAULT 'system@inspeaker.com.co' AFTER id`);
-        console.log(`Columna 'created_by' agregada exitosamente a ${table}`);
-      } catch (err) {
-        if (err.code !== 'ER_DUP_FIELDNAME') {
-          console.error(`Error verificando tabla ${table}:`, err.message);
-        }
-      }
-    }
-
-    // Crear tabla de usuarios si no existe y sembrar usuarios iniciales
     await connection.query(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -57,14 +42,12 @@ async function initDB() {
 
     const [rows] = await connection.query('SELECT COUNT(*) as count FROM users');
     if (rows[0].count === 0) {
-      console.log('Sembrando usuarios iniciales...');
       await connection.query('INSERT INTO users (email, password) VALUES (?, ?), (?, ?)', [
         'lider.software@wisdomtecnology.com.co', 'GalaxyS2',
         'gerencia.ti@wisdomtecnology.com.co', 'Sittca1985!.'
       ]);
     }
     
-    console.log('----------------------------------------');
     connection.release();
   } catch (err) {
     console.error('ERROR DE CONEXIÓN REMOTA:', err.message);
@@ -89,17 +72,70 @@ const logAuditAction = async (entityType, entityId, action, userEmail, details =
   }
 };
 
-// --- AUTHENTICATION ROUTES ---
+// --- REDIRECCIÓN CON FILTRO DE BOTS ---
+
+app.get('/l/:maskedCode', async (req, res) => {
+  let { maskedCode } = req.params;
+  const userAgent = req.headers['user-agent'] || '';
+  
+  const botPatterns = [
+    'WhatsApp', 'facebookexternalhit', 'Facebot', 'Twitterbot', 
+    'LinkedInBot', 'Slackbot', 'TelegramBot', 'Discordbot', 
+    'Googlebot', 'bingbot', 'Slack-ImgProxy', 'Slackbot-LinkExpanding',
+    'Pinterest', 'crawler', 'bot', 'spider'
+  ];
+  
+  const isBot = botPatterns.some(pattern => userAgent.toLowerCase().includes(pattern.toLowerCase()));
+
+  let shortCode = maskedCode;
+  try {
+    const decoded = Buffer.from(maskedCode, 'base64').toString('utf-8');
+    if (decoded.startsWith('INS-')) shortCode = decoded;
+  } catch (e) {}
+
+  const errorResponse = `<div style="text-align:center;padding:50px;font-family:sans-serif;background:#0A0A0A;color:white;height:100vh;display:flex;flex-direction:column;justify-content:center;"><h1 style="color:#F97316;font-size:4rem;margin:0;">ERROR</h1><h2 style="text-transform:uppercase;letter-spacing:0.2em;">Link No Reconocido</h2><p style="color:#666;">El enlace solicitado no está activo o ha expirado.</p><a href="https://inspeaker.com.co" style="color:#F97316;text-decoration:none;margin-top:20px;font-weight:bold;">VOLVER A !NSPEAKER</a></div>`;
+
+  try {
+    const [rows] = await pool.execute(`
+      SELECT l.*, g.status as groupStatus 
+      FROM smart_links l 
+      JOIN analytics_subgroups sg ON l.subgroup_id = sg.id 
+      JOIN analytics_groups g ON sg.group_id = g.id 
+      WHERE l.shortCode = ?`, [shortCode]);
+    
+    if (rows.length === 0) return res.status(404).send(errorResponse);
+    
+    const link = rows[0];
+    const now = new Date();
+    const expiry = new Date(link.expiresAt);
+    expiry.setHours(23, 59, 59, 999);
+
+    if (link.groupStatus !== 'Publicado' || now > expiry) return res.status(403).send(errorResponse);
+
+    if (!isBot) {
+      await pool.execute('UPDATE smart_links SET clicks = clicks + 1 WHERE id = ?', [link.id]);
+      await logAuditAction('link', link.id, 'CLICK_REAL', 'anonymous', `User-Agent: ${userAgent}`);
+    } else {
+      await logAuditAction('link', link.id, 'CRAWLER_PREVIEW', 'system', `Detección de Bot: ${userAgent}`);
+    }
+
+    res.redirect(302, link.targetUrl);
+  } catch (err) {
+    res.status(500).send('Error en el motor de redirección !NSPEAKER.');
+  }
+});
+
+// --- AUTHENTICATION ---
 
 app.post('/api/register', async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ success: false, error: 'Datos incompletos' });
-  
   try {
     const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing.length > 0) return res.status(400).json({ success: false, error: 'El usuario ya existe' });
-
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, error: 'El usuario ya existe' });
+    }
     await pool.execute('INSERT INTO users (email, password) VALUES (?, ?)', [email, password]);
+    await logAuditAction('user', email, 'REGISTER', email, 'Registro de nuevo usuario');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -109,8 +145,9 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const [users] = await pool.execute('SELECT email, password FROM users WHERE email = ? AND password = ?', [email, password]);
+    const [users] = await pool.execute('SELECT email FROM users WHERE email = ? AND password = ?', [email, password]);
     if (users.length > 0) {
+      await logAuditAction('session', 'auth', 'LOGIN', users[0].email, 'Inicio de sesión exitoso');
       res.json({ success: true, user: { email: users[0].email } });
     } else {
       res.status(401).json({ success: false, error: 'Credenciales inválidas' });
@@ -120,45 +157,11 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// --- ANALYTICS ROUTES ---
-
-app.get('/l/:maskedCode', async (req, res) => {
-  let { maskedCode } = req.params;
-  let shortCode = maskedCode;
-  try {
-    const decoded = Buffer.from(maskedCode, 'base64').toString('utf-8');
-    if (decoded.startsWith('INS-')) shortCode = decoded;
-  } catch (e) {}
-
-  const errorResponse = `<div style="text-align:center;padding:50px;font-family:sans-serif;background:#0A0A0A;color:white;height:100vh;display:flex;flex-direction:column;justify-content:center;"><h1 style="color:#F97316;font-size:4rem;margin:0;">ERROR</h1><h2 style="text-transform:uppercase;letter-spacing:0.2em;">Link No Reconocido</h2><p style="color:#666;">El enlace solicitado no está activo, ha expirado o el código es inválido.</p><a href="https://inspeaker.com.co" style="color:#F97316;text-decoration:none;margin-top:20px;font-weight:bold;">VOLVER A !NSPEAKER</a></div>`;
-
-  try {
-    const [rows] = await pool.execute(`SELECT l.*, g.status as groupStatus FROM smart_links l JOIN analytics_subgroups sg ON l.subgroup_id = sg.id JOIN analytics_groups g ON sg.group_id = g.id WHERE l.shortCode = ?`, [shortCode]);
-    if (rows.length === 0) return res.status(404).send(errorResponse);
-    const link = rows[0];
-    const now = new Date();
-    const expiry = new Date(link.expiresAt);
-    expiry.setHours(23, 59, 59, 999);
-    if (link.groupStatus !== 'Publicado' || now > expiry) return res.status(403).send(errorResponse);
-    await pool.execute('UPDATE smart_links SET clicks = clicks + 1 WHERE id = ?', [link.id]);
-    res.redirect(302, link.targetUrl);
-  } catch (err) {
-    res.status(500).send('Error interno del servidor !NSPEAKER.');
-  }
+app.post('/api/logout', (req, res) => {
+  res.json({ success: true });
 });
 
-app.get('/api/db-status', async (req, res) => {
-  try {
-    const start = Date.now();
-    const connection = await pool.getConnection();
-    await connection.ping();
-    connection.release();
-    const latency = Date.now() - start;
-    res.json({ connected: true, host: dbConfig.host, latency: `${latency}ms` });
-  } catch (err) {
-    res.json({ connected: false });
-  }
-});
+// --- CRUD ROUTES ---
 
 app.get('/api/groups', async (req, res) => {
   try {
@@ -179,17 +182,16 @@ app.get('/api/groups', async (req, res) => {
 });
 
 app.post('/api/groups', async (req, res) => {
-  const { name, subgroupCount, userEmail } = req.body;
+  const { name, subgroupCount } = req.body;
   const groupId = `g-${Date.now()}`;
   const createdAt = getAdjustedDateTime();
-  const creator = userEmail || 'system@inspeaker.com.co';
+  const creator = 'system@inspeaker.com.co'; // En versión sin sesión, usamos un fallback o lo pasamos desde el front
   try {
     await pool.execute('INSERT INTO analytics_groups (id, name, createdAt, status, created_by) VALUES (?, ?, ?, ?, ?)', [groupId, name, createdAt, 'No Publicado', creator]);
-    await logAuditAction('group', groupId, 'CREATE', creator, `Nombre: ${name}, Subgrupos iniciales: ${subgroupCount}`);
+    await logAuditAction('group', groupId, 'CREATE', creator, `Cultura: ${name}`);
     for (let i = 0; i < subgroupCount; i++) {
       const sgId = `sg-${Date.now()}-${i}`;
       await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [sgId, groupId, `Subgrupo ${i + 1}`, creator]);
-      await logAuditAction('subgroup', sgId, 'CREATE_INITIAL', creator, `Perteneciente al grupo: ${groupId}`);
     }
     res.json({ id: groupId, name, createdAt });
   } catch (err) {
@@ -197,131 +199,17 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
-app.put('/api/groups/:id', async (req, res) => {
-  const { name, userEmail } = req.body;
-  const creator = userEmail || 'system@inspeaker.com.co';
+app.get('/api/db-status', async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT status FROM analytics_groups WHERE id = ?', [req.params.id]);
-    if (rows.length > 0 && rows[0].status === 'Publicado') return res.status(403).json({ error: 'Bloqueado' });
-    await pool.execute('UPDATE analytics_groups SET name = ? WHERE id = ?', [name, req.params.id]);
-    await logAuditAction('group', req.params.id, 'RENAME', creator, `Nuevo nombre: ${name}`);
-    res.sendStatus(200);
+    const start = Date.now();
+    await pool.execute('SELECT 1');
+    const latency = Date.now() - start;
+    res.json({ connected: true, host: dbConfig.host, latency: `${latency}ms` });
   } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/groups/:id/status', async (req, res) => {
-  const { status, userEmail } = req.body;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  const publishedAt = status === 'Publicado' ? getAdjustedDateTime() : null;
-  try {
-    await pool.execute('UPDATE analytics_groups SET status = ?, publishedAt = ? WHERE id = ?', [status, publishedAt, req.params.id]);
-    await logAuditAction('group', req.params.id, 'STATUS_CHANGE', creator, `Nuevo estado: ${status}`);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/groups/:id', async (req, res) => {
-  const { userEmail } = req.query;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  try {
-    const [rows] = await pool.execute('SELECT status FROM analytics_groups WHERE id = ?', [req.params.id]);
-    if (rows.length > 0 && rows[0].status === 'Publicado') return res.status(403).json({ error: 'Bloqueado' });
-    await logAuditAction('group', req.params.id, 'DELETE', creator);
-    await pool.execute('DELETE FROM analytics_groups WHERE id = ?', [req.params.id]);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/groups/:groupId/subgroups', async (req, res) => {
-  const { name, count, userEmail } = req.body;
-  const { groupId } = req.params;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  try {
-    for (let i = 0; i < (count || 1); i++) {
-      const sgId = `sg-${Date.now()}-${i}`;
-      const finalName = (count && count > 1) ? `${name} ${i + 1}` : name;
-      await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [sgId, groupId, finalName, creator]);
-      await logAuditAction('subgroup', sgId, 'CREATE', creator, `Nombre: ${finalName}, Grupo: ${groupId}`);
-    }
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/subgroups/:id', async (req, res) => {
-  const { name, userEmail } = req.body;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  try {
-    await pool.execute('UPDATE analytics_subgroups SET name = ? WHERE id = ?', [name, req.params.id]);
-    await logAuditAction('subgroup', req.params.id, 'RENAME', creator, `Nuevo nombre: ${name}`);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/subgroups/:id', async (req, res) => {
-  const { userEmail } = req.query;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  try {
-    await logAuditAction('subgroup', req.params.id, 'DELETE', creator);
-    await pool.execute('DELETE FROM analytics_subgroups WHERE id = ?', [req.params.id]);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
-  const { subgroupId } = req.params;
-  const { count, expiresAt, userEmail } = req.body;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  const createdAt = getAdjustedDateTime();
-  try {
-    for (let i = 0; i < count; i++) {
-      const linkId = `l-${Date.now()}-${i}`;
-      const label = `Link Inteligente ${i + 1}`;
-      const shortCode = `INS-${Math.random().toString(36).substring(7).toUpperCase()}`;
-      await pool.execute('INSERT INTO smart_links (id, subgroup_id, label, targetUrl, shortCode, clicks, createdAt, expiresAt, created_by) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)', [linkId, subgroupId, label, 'https://inspeaker.com.co', shortCode, createdAt, expiresAt, creator]);
-      await logAuditAction('link', linkId, 'CREATE', creator, `Label: ${label}, Subgrupo: ${subgroupId}, Expira: ${expiresAt}`);
-    }
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/links/:id', async (req, res) => {
-  const { label, expiresAt, userEmail } = req.body;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  try {
-    await pool.execute('UPDATE smart_links SET label = ?, expiresAt = ? WHERE id = ?', [label, expiresAt, req.params.id]);
-    await logAuditAction('link', req.params.id, 'UPDATE', creator, `Nuevo label: ${label}, Nueva expiración: ${expiresAt}`);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/links/:id', async (req, res) => {
-  const { userEmail } = req.query;
-  const creator = userEmail || 'system@inspeaker.com.co';
-  try {
-    await logAuditAction('link', req.params.id, 'DELETE', creator);
-    await pool.execute('DELETE FROM smart_links WHERE id = ?', [req.params.id]);
-    res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ connected: false });
   }
 });
 
 initDB();
 const PORT = 3001;
-app.listen(PORT, () => console.log(`Backend !NSPEAKER escuchando en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Backend !NSPEAKER (Modo Stateless) en puerto ${PORT}`));
