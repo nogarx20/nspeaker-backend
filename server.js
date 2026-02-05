@@ -22,7 +22,6 @@ const dbConfig = {
   enableKeepAlive: true,
   keepAliveInitialDelay: 0
 };
-
 let pool;
 
 async function initDB() {
@@ -200,13 +199,84 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
+// --- ACTUALIZACIÓN DE ESTADO Y CRUD FALTANTE ---
+
+app.put('/api/groups/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    const publishedAt = status === 'Publicado' ? getAdjustedDateTime() : null;
+    try {
+        await pool.execute('UPDATE analytics_groups SET status = ?, publishedAt = ? WHERE id = ?', [status, publishedAt, id]);
+        await logAuditAction('group', id, 'UPDATE_STATUS', 'system', `Estado cambiado a: ${status}`);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/groups/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name } = req.body;
+    try {
+        await pool.execute('UPDATE analytics_groups SET name = ? WHERE id = ?', [name, id]);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/groups/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.execute('DELETE FROM analytics_groups WHERE id = ?', [id]);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/groups/:groupId/subgroups', async (req, res) => {
+    const { groupId } = req.params;
+    const { name, count } = req.body;
+    const creator = 'system@inspeaker.com.co';
+    try {
+        for (let i = 0; i < count; i++) {
+            const sgId = `sg-${Date.now()}-${i}`;
+            await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [sgId, groupId, `${name} ${i + 1}`, creator]);
+        }
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/subgroups/:subgroupId', async (req, res) => {
+    const { subgroupId } = req.params;
+    const { name } = req.body;
+    try {
+        await pool.execute('UPDATE analytics_subgroups SET name = ? WHERE id = ?', [name, subgroupId]);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/subgroups/:subgroupId', async (req, res) => {
+    const { subgroupId } = req.params;
+    try {
+        await pool.execute('DELETE FROM analytics_subgroups WHERE id = ?', [subgroupId]);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
   const { subgroupId } = req.params;
   const { count, expiresAt } = req.body;
   const creator = 'system@inspeaker.com.co';
   const createdAt = getAdjustedDateTime();
   
-  // Temas referentes para la búsqueda aleatoria en Google
   const topics = [
     "Metodo Harvard de Negociacion !NSPEAKER",
     "HumanOS sistema operativo humano Damian Barrios",
@@ -224,8 +294,6 @@ app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
     for (let i = 0; i < count; i++) {
       const linkId = `l-${Date.now()}-${i}`;
       const shortCode = `INS-${Math.random().toString(36).substring(7).toUpperCase()}`;
-      
-      // Seleccionar un tema aleatorio para el targetUrl
       const randomTopic = topics[Math.floor(Math.random() * topics.length)];
       const targetUrl = `https://www.google.com/search?q=${encodeURIComponent(randomTopic)}`;
       
@@ -239,6 +307,31 @@ app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.put('/api/links/:id', async (req, res) => {
+    const { id } = req.params;
+    const { label, expiresAt } = req.body;
+    try {
+        if (expiresAt) {
+            await pool.execute('UPDATE smart_links SET label = ?, expiresAt = ? WHERE id = ?', [label, expiresAt, id]);
+        } else {
+            await pool.execute('UPDATE smart_links SET label = ? WHERE id = ?', [label, id]);
+        }
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/links/:linkId', async (req, res) => {
+    const { linkId } = req.params;
+    try {
+        await pool.execute('DELETE FROM smart_links WHERE id = ?', [linkId]);
+        res.sendStatus(200);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/db-status', async (req, res) => {
