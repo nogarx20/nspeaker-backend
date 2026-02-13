@@ -24,7 +24,6 @@ const dbConfig = {
 };
 
 let pool;
-
 async function initDB() {
   try {
     pool = mysql.createPool(dbConfig);
@@ -40,6 +39,9 @@ const getAdjustedDateTime = () => {
   const date = new Date();
   return date.toISOString().slice(0, 19).replace('T', ' ');
 };
+
+// Helper para normalizar valores vacíos a NULL para la base de datos
+const nil = (val) => (val === undefined || val === '' || val === null) ? null : val;
 
 // Centralizador de Logging de Errores
 const handleServerError = async (req, error, contextData = null) => {
@@ -127,7 +129,7 @@ app.get('/api/db-status', async (req, res) => {
 // --- MEDIAFLOW: PODCASTS ---
 app.get('/api/media/podcasts', async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT * FROM podcasts ORDER BY id DESC');
+    const [rows] = await pool.execute('SELECT * FROM podcasts ORDER BY date DESC, id DESC');
     res.json(rows);
   } catch (err) {
     await handleServerError(req, err);
@@ -142,10 +144,20 @@ app.post('/api/media/podcasts', async (req, res) => {
       `INSERT INTO podcasts (title, speaker, speakerTitle, speakerAvatar, company, date, description, location, duration, imageUrl, instagramUrl, youtubeUrl, spotifyUrl, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        p.title, p.speaker, p.speakerTitle || null, p.speakerAvatar || null, 
-        p.company || null, p.date || null, p.description || null, p.location || null, 
-        p.duration || '00:00', p.imageUrl || null, p.instagramUrl || '#', 
-        p.youtubeUrl || '#', p.spotifyUrl || '#', p.status || 'BORRADOR'
+        nil(p.title), 
+        nil(p.speaker), 
+        nil(p.speakerTitle), 
+        nil(p.speakerAvatar), 
+        nil(p.company), 
+        nil(p.date), 
+        nil(p.description), 
+        nil(p.location), 
+        nil(p.duration) || '00:00', 
+        nil(p.imageUrl), 
+        nil(p.instagramUrl) || '#', 
+        nil(p.youtubeUrl) || '#', 
+        nil(p.spotifyUrl) || '#', 
+        nil(p.status) || 'BORRADOR'
       ]
     );
     await logAction('podcast', result.insertId, 'CREATE', 'admin@inspeaker.com.co', p.title);
@@ -153,6 +165,26 @@ app.post('/api/media/podcasts', async (req, res) => {
   } catch (err) {
     await handleServerError(req, err);
     res.status(500).json({ error: 'Error al crear el podcast' });
+  }
+});
+
+app.put('/api/media/podcasts/:id', async (req, res) => {
+  const p = req.body;
+  const { id } = req.params;
+  try {
+    await pool.execute(
+      `UPDATE podcasts SET title=?, speaker=?, speakerTitle=?, speakerAvatar=?, company=?, date=?, description=?, location=?, duration=?, imageUrl=?, instagramUrl=?, youtubeUrl=?, spotifyUrl=?, status=? WHERE id=?`,
+      [
+        nil(p.title), nil(p.speaker), nil(p.speakerTitle), nil(p.speakerAvatar), 
+        nil(p.company), nil(p.date), nil(p.description), nil(p.location), 
+        nil(p.duration), nil(p.imageUrl), nil(p.instagramUrl), nil(p.youtubeUrl), 
+        nil(p.spotifyUrl), nil(p.status), id
+      ]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al actualizar el podcast' });
   }
 });
 
@@ -169,7 +201,7 @@ app.delete('/api/media/podcasts/:id', async (req, res) => {
 // --- MEDIAFLOW: CONFERENCES ---
 app.get('/api/media/conferences', async (req, res) => {
   try {
-    const [rows] = await pool.execute('SELECT * FROM conference_clips ORDER BY id DESC');
+    const [rows] = await pool.execute('SELECT * FROM conference_clips ORDER BY publicado DESC, id DESC');
     res.json(rows);
   } catch (err) {
     await handleServerError(req, err);
@@ -184,9 +216,17 @@ app.post('/api/media/conferences', async (req, res) => {
       `INSERT INTO conference_clips (title, speaker, speakerTitle, speakerAvatar, duration, publicado, imageUrl, youtubeUrl, location, description, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        c.title, c.speaker, c.speakerTitle || null, c.speakerAvatar || null, 
-        c.duration || '00:00', c.publicado || c.date || null, c.imageUrl || null, 
-        c.youtubeUrl || '', c.location || null, c.description || null, c.status || 'BORRADOR'
+        nil(c.title), 
+        nil(c.speaker), 
+        nil(c.speakerTitle), 
+        nil(c.speakerAvatar), 
+        nil(c.duration) || '00:00', 
+        nil(c.publicado) || nil(c.date), 
+        nil(c.imageUrl), 
+        nil(c.youtubeUrl) || '', 
+        nil(c.location), 
+        nil(c.description), 
+        nil(c.status) || 'BORRADOR'
       ]
     );
     await logAction('conference', result.insertId, 'CREATE', 'admin@inspeaker.com.co', c.title);
@@ -194,6 +234,25 @@ app.post('/api/media/conferences', async (req, res) => {
   } catch (err) {
     await handleServerError(req, err);
     res.status(500).json({ error: 'Error al crear el clip de conferencia' });
+  }
+});
+
+app.put('/api/media/conferences/:id', async (req, res) => {
+  const c = req.body;
+  const { id } = req.params;
+  try {
+    await pool.execute(
+      `UPDATE conference_clips SET title=?, speaker=?, speakerTitle=?, speakerAvatar=?, duration=?, publicado=?, imageUrl=?, youtubeUrl=?, location=?, description=?, status=? WHERE id=?`,
+      [
+        nil(c.title), nil(c.speaker), nil(c.speakerTitle), nil(c.speakerAvatar), 
+        nil(c.duration), nil(c.publicado) || nil(c.date), nil(c.imageUrl), 
+        nil(c.youtubeUrl), nil(c.location), nil(c.description), nil(c.status), id
+      ]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al actualizar la conferencia' });
   }
 });
 
