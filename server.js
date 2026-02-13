@@ -1,3 +1,4 @@
+
 import express from 'express';
 import mysql from 'mysql2/promise';
 import cors from 'cors';
@@ -10,341 +11,95 @@ app.use(cors());
 app.use(express.json());
 
 const dbConfig = {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME,
+  host: 'app.sittca.com.co',
+  port: 3306,
+  user: 'root',
+  password: 'galaxys2',
+  database: 'nspeaker_db',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
-  connectTimeout: 15000,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 0
+  queueLimit: 0
 };
+
 let pool;
 
 async function initDB() {
   try {
     pool = mysql.createPool(dbConfig);
-    const connection = await pool.getConnection();
-    console.log('--- !NSPEAKER REMOTE DATABASE STATUS ---');
-    console.log(`CONNECTED TO: ${dbConfig.host}`);
-    
-    await connection.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    const [rows] = await connection.query('SELECT COUNT(*) as count FROM users');
-    if (rows[0].count === 0) {
-      await connection.query('INSERT INTO users (email, password) VALUES (?, ?), (?, ?)', [
-        'lider.software@wisdomtecnology.com.co', 'GalaxyS2',
-        'gerencia.ti@wisdomtecnology.com.co', 'Sittca1985!.'
-      ]);
-    }
-    
-    connection.release();
+    console.log('--- !NSPEAKER DATABASE CONNECTED ---');
   } catch (err) {
-    console.error('ERROR DE CONEXIÓN REMOTA:', err.message);
+    console.error('DB CONNECTION ERROR:', err.message);
   }
 }
 
-const getAdjustedDateTime = () => {
-  const date = new Date();
-  date.setHours(date.getHours() + 7);
-  return date.toISOString().slice(0, 19).replace('T', ' ');
-};
-
-const logAuditAction = async (entityType, entityId, action, userEmail, details = null) => {
+// Helper para auditoría
+const logAction = async (type, id, action, email, details) => {
   try {
-    const timestamp = getAdjustedDateTime();
     await pool.execute(
-      'INSERT INTO audit_logs (entity_type, entity_id, action, user_email, timestamp, details) VALUES (?, ?, ?, ?, ?, ?)',
-      [entityType, entityId, action, userEmail || 'unknown@system', timestamp, details]
+      'INSERT INTO audit_logs (entity_type, entity_id, action, user_email, details) VALUES (?, ?, ?, ?, ?)',
+      [type, String(id), action, email || 'system', details]
     );
-  } catch (err) {
-    console.error('Error al guardar log de auditoría:', err.message);
-  }
+  } catch (e) { console.error('Audit Error:', e); }
 };
 
-// --- REDIRECCIÓN CON FILTRO DE BOTS ---
-
-app.get('/l/:maskedCode', async (req, res) => {
-  let { maskedCode } = req.params;
-  const userAgent = req.headers['user-agent'] || '';
-  
-  const botPatterns = [
-    'WhatsApp', 'facebookexternalhit', 'Facebot', 'Twitterbot', 
-    'LinkedInBot', 'Slackbot', 'TelegramBot', 'Discordbot', 
-    'Googlebot', 'bingbot', 'Slack-ImgProxy', 'Slackbot-LinkExpanding',
-    'Pinterest', 'crawler', 'bot', 'spider'
-  ];
-  
-  const isBot = botPatterns.some(pattern => userAgent.toLowerCase().includes(pattern.toLowerCase()));
-
-  let shortCode = maskedCode;
+// --- PODCASTS API ---
+app.get('/api/media/podcasts', async (req, res) => {
   try {
-    const decoded = Buffer.from(maskedCode, 'base64').toString('utf-8');
-    if (decoded.startsWith('INS-')) shortCode = decoded;
-  } catch (e) {}
+    const [rows] = await pool.execute('SELECT * FROM podcasts ORDER BY id DESC');
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-  const errorResponse = `<div style="text-align:center;padding:50px;font-family:sans-serif;background:#0A0A0A;color:white;height:100vh;display:flex;flex-direction:column;justify-content:center;"><h1 style="color:#F97316;font-size:4rem;margin:0;">ERROR</h1><h2 style="text-transform:uppercase;letter-spacing:0.2em;">Link No Reconocido</h2><p style="color:#666;">El enlace solicitado no está activo o ha expirado.</p><a href="https://inspeaker.com.co" style="color:#F97316;text-decoration:none;margin-top:20px;font-weight:bold;">VOLVER A !NSPEAKER</a></div>`;
-
+app.post('/api/media/podcasts', async (req, res) => {
+  const p = req.body;
   try {
-    const [rows] = await pool.execute(`
-      SELECT l.*, g.status as groupStatus 
-      FROM smart_links l 
-      JOIN analytics_subgroups sg ON l.subgroup_id = sg.id 
-      JOIN analytics_groups g ON sg.group_id = g.id 
-      WHERE l.shortCode = ?`, [shortCode]);
-    
-    if (rows.length === 0) return res.status(404).send(errorResponse);
-    
-    const link = rows[0];
-    const now = new Date();
-    const expiry = new Date(link.expiresAt);
-    expiry.setHours(23, 59, 59, 999);
-
-    if (link.groupStatus !== 'Publicado' || now > expiry) return res.status(403).send(errorResponse);
-
-    if (!isBot) {
-      await pool.execute('UPDATE smart_links SET clicks = clicks + 1 WHERE id = ?', [link.id]);
-      await logAuditAction('link', link.id, 'CLICK_REAL', 'anonymous', `User-Agent: ${userAgent}`);
-    } else {
-      await logAuditAction('link', link.id, 'CRAWLER_PREVIEW', 'system', `Detección de Bot: ${userAgent}`);
-    }
-
-    res.redirect(302, link.targetUrl);
-  } catch (err) {
-    res.status(500).send('Error en el motor de redirección !NSPEAKER.');
-  }
+    const [result] = await pool.execute(
+      `INSERT INTO podcasts (title, speaker, speakerTitle, speakerAvatar, company, date, description, location, duration, imageUrl, instagramUrl, youtubeUrl, spotifyUrl, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [p.title, p.speaker, p.speakerTitle, p.speakerAvatar, p.company, p.date, p.description, p.location, p.duration, p.imageUrl, p.instagramUrl, p.youtubeUrl, p.spotifyUrl, p.status]
+    );
+    await logAction('podcast', result.insertId, 'CREATE', 'admin@inspeaker.com.co', p.title);
+    res.json({ id: result.insertId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- AUTHENTICATION ---
-
-app.post('/api/register', async (req, res) => {
-  const { email, password } = req.body;
+app.delete('/api/media/podcasts/:id', async (req, res) => {
   try {
-    const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing.length > 0) {
-      return res.status(400).json({ success: false, error: 'El usuario ya existe' });
-    }
-    await pool.execute('INSERT INTO users (email, password) VALUES (?, ?)', [email, password]);
-    await logAuditAction('user', email, 'REGISTER', email, 'Registro de nuevo usuario');
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const [users] = await pool.execute('SELECT email FROM users WHERE email = ? AND password = ?', [email, password]);
-    if (users.length > 0) {
-      await logAuditAction('session', 'auth', 'LOGIN', users[0].email, 'Inicio de sesión exitoso');
-      res.json({ success: true, user: { email: users[0].email } });
-    } else {
-      res.status(401).json({ success: false, error: 'Credenciales inválidas' });
-    }
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.post('/api/logout', (req, res) => {
-  res.json({ success: true });
-});
-
-// --- CRUD ROUTES ---
-
-app.get('/api/groups', async (req, res) => {
-  try {
-    const [groups] = await pool.execute('SELECT * FROM analytics_groups ORDER BY createdAt DESC');
-    const [subgroups] = await pool.execute('SELECT * FROM analytics_subgroups');
-    const [links] = await pool.execute('SELECT * FROM smart_links');
-    const result = groups.map(g => ({
-      ...g,
-      subgroups: subgroups.filter(sg => sg.group_id === g.id).map(sg => ({
-        ...sg,
-        links: links.filter(l => l.subgroup_id === sg.id)
-      }))
-    }));
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/groups', async (req, res) => {
-  const { name, subgroupCount } = req.body;
-  const groupId = `g-${Date.now()}`;
-  const createdAt = getAdjustedDateTime();
-  const creator = 'system@inspeaker.com.co'; 
-  try {
-    await pool.execute('INSERT INTO analytics_groups (id, name, createdAt, status, created_by) VALUES (?, ?, ?, ?, ?)', [groupId, name, createdAt, 'No Publicado', creator]);
-    await logAuditAction('group', groupId, 'CREATE', creator, `Cultura: ${name}`);
-    for (let i = 0; i < subgroupCount; i++) {
-      const sgId = `sg-${Date.now()}-${i}`;
-      await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [sgId, groupId, `Subgrupo ${i + 1}`, creator]);
-    }
-    res.json({ id: groupId, name, createdAt });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- ACTUALIZACIÓN DE ESTADO Y CRUD FALTANTE ---
-
-app.put('/api/groups/:id/status', async (req, res) => {
-    const { id } = req.params;
-    const { status } = req.body;
-    const publishedAt = status === 'Publicado' ? getAdjustedDateTime() : null;
-    try {
-        await pool.execute('UPDATE analytics_groups SET status = ?, publishedAt = ? WHERE id = ?', [status, publishedAt, id]);
-        await logAuditAction('group', id, 'UPDATE_STATUS', 'system', `Estado cambiado a: ${status}`);
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.put('/api/groups/:id', async (req, res) => {
-    const { id } = req.params;
-    const { name } = req.body;
-    try {
-        await pool.execute('UPDATE analytics_groups SET name = ? WHERE id = ?', [name, id]);
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.delete('/api/groups/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.execute('DELETE FROM analytics_groups WHERE id = ?', [id]);
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.post('/api/groups/:groupId/subgroups', async (req, res) => {
-    const { groupId } = req.params;
-    const { name, count } = req.body;
-    const creator = 'system@inspeaker.com.co';
-    try {
-        for (let i = 0; i < count; i++) {
-            const sgId = `sg-${Date.now()}-${i}`;
-            await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [sgId, groupId, `${name} ${i + 1}`, creator]);
-        }
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.put('/api/subgroups/:subgroupId', async (req, res) => {
-    const { subgroupId } = req.params;
-    const { name } = req.body;
-    try {
-        await pool.execute('UPDATE analytics_subgroups SET name = ? WHERE id = ?', [name, subgroupId]);
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.delete('/api/subgroups/:subgroupId', async (req, res) => {
-    const { subgroupId } = req.params;
-    try {
-        await pool.execute('DELETE FROM analytics_subgroups WHERE id = ?', [subgroupId]);
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
-  const { subgroupId } = req.params;
-  const { count, expiresAt } = req.body;
-  const creator = 'system@inspeaker.com.co';
-  const createdAt = getAdjustedDateTime();
-  
-  const topics = [
-    "Metodo Harvard de Negociacion !NSPEAKER",
-    "HumanOS sistema operativo humano Damian Barrios",
-    "Innovacion humana en empresas !NSPEAKER",
-    "Liderazgo transformacional y oratoria inmersiva",
-    "Estrategia de negocios disruptiva !NSPEAKER",
-    "Experiencia como Servicio XaaS !NSPEAKER",
-    "Emprendimiento con proposito HumanOS",
-    "Charlas inmersivas EVVA !NSPEAKER",
-    "Damian Barrios Castillo !NSPEAKER Founder",
-    "Wilson Munive Camargo !NSPEAKER Cofounder"
-  ];
-
-  try {
-    for (let i = 0; i < count; i++) {
-      const linkId = `l-${Date.now()}-${i}`;
-      const shortCode = `INS-${Math.random().toString(36).substring(7).toUpperCase()}`;
-      const randomTopic = topics[Math.floor(Math.random() * topics.length)];
-      const targetUrl = `https://www.google.com/search?q=${encodeURIComponent(randomTopic)}`;
-      
-      await pool.execute(
-        'INSERT INTO smart_links (id, subgroup_id, label, targetUrl, shortCode, clicks, createdAt, expiresAt, created_by) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)',
-        [linkId, subgroupId, `Link ${i + 1}`, targetUrl, shortCode, createdAt, expiresAt, creator]
-      );
-    }
-    await logAuditAction('subgroup', subgroupId, 'GENERATE_LINKS', creator, `Generados ${count} links con redirección aleatoria`);
+    await pool.execute('DELETE FROM podcasts WHERE id = ?', [req.params.id]);
+    await logAction('podcast', req.params.id, 'DELETE', 'admin@inspeaker.com.co', 'Cápsula eliminada');
     res.sendStatus(200);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/links/:id', async (req, res) => {
-    const { id } = req.params;
-    const { label, expiresAt } = req.body;
-    try {
-        if (expiresAt) {
-            await pool.execute('UPDATE smart_links SET label = ?, expiresAt = ? WHERE id = ?', [label, expiresAt, id]);
-        } else {
-            await pool.execute('UPDATE smart_links SET label = ? WHERE id = ?', [label, id]);
-        }
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.delete('/api/links/:linkId', async (req, res) => {
-    const { linkId } = req.params;
-    try {
-        await pool.execute('DELETE FROM smart_links WHERE id = ?', [linkId]);
-        res.sendStatus(200);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.get('/api/db-status', async (req, res) => {
+// --- CONFERENCES API ---
+app.get('/api/media/conferences', async (req, res) => {
   try {
-    const start = Date.now();
-    await pool.execute('SELECT 1');
-    const latency = Date.now() - start;
-    res.json({ connected: true, host: dbConfig.host, latency: `${latency}ms` });
-  } catch (err) {
-    res.json({ connected: false });
-  }
+    const [rows] = await pool.execute('SELECT * FROM conference_clips ORDER BY id DESC');
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/media/conferences', async (req, res) => {
+  const c = req.body;
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO conference_clips (title, speaker, speakerTitle, speakerAvatar, duration, publicado, imageUrl, youtubeUrl, location, description, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [c.title, c.speaker, c.speakerTitle, c.speakerAvatar, c.duration, c.publicado || c.date, c.imageUrl, c.youtubeUrl, c.location, c.description, c.status]
+    );
+    await logAction('conference', result.insertId, 'CREATE', 'admin@inspeaker.com.co', c.title);
+    res.json({ id: result.insertId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/media/conferences/:id', async (req, res) => {
+  try {
+    await pool.execute('DELETE FROM conference_clips WHERE id = ?', [req.params.id]);
+    await logAction('conference', req.params.id, 'DELETE', 'admin@inspeaker.com.co', 'Clip eliminado');
+    res.sendStatus(200);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 initDB();
-const PORT = 3001;
-app.listen(PORT, () => console.log(`Backend !NSPEAKER (Modo Stateless) en puerto ${PORT}`));
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`MediaFlow Backend Running on ${PORT}`));
