@@ -1,7 +1,9 @@
+
 import express from 'express';
 import mysql from 'mysql2/promise';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
@@ -10,11 +12,14 @@ app.use(cors());
 app.use(express.json());
 
 const dbConfig = {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS,
-  database: process.env.DB_NAME,
+  host: 'app.sittca.com.co',
+  port: 3306,
+  user: 'root',
+  password: 'galaxys2',
+  database: 'nspeaker_db',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
   connectTimeout: 15000
 };
 
@@ -50,13 +55,10 @@ const handleServerError = async (req, error, contextData = null) => {
     context: contextData
   });
 
-  // Log en Consola (Visible para el admin en terminal)
   console.error(`\n[ERROR SERVER - ${timestamp}]`);
   console.error(`Route: ${method} ${endpoint}`);
   console.error(`Message: ${errorMessage}`);
-  console.error(`Stack: ${stackTrace.split('\n')[1].trim()}`); // Muestra la línea exacta del error
 
-  // Persistir en Base de Datos (Para revisión histórica)
   try {
     if (pool) {
       await pool.execute(
@@ -69,7 +71,6 @@ const handleServerError = async (req, error, contextData = null) => {
   }
 };
 
-// Helper para auditoría de acciones exitosas
 const logAction = async (type, id, action, email, details) => {
   try {
     if (pool) {
@@ -113,13 +114,11 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// --- STATUS API ---
 app.get('/api/db-status', async (req, res) => {
   try {
     await pool.execute('SELECT 1');
     res.json({ connected: true, host: dbConfig.host, latency: '24ms' });
   } catch (err) {
-    // No registramos este en DB para no saturar si hay micro-cortes, solo consola
     console.warn(`[DB-STATUS] Offline: ${err.message}`);
     res.json({ connected: false });
   }
@@ -142,7 +141,12 @@ app.post('/api/media/podcasts', async (req, res) => {
     const [result] = await pool.execute(
       `INSERT INTO podcasts (title, speaker, speakerTitle, speakerAvatar, company, date, description, location, duration, imageUrl, instagramUrl, youtubeUrl, spotifyUrl, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [p.title, p.speaker, p.speakerTitle, p.speakerAvatar, p.company, p.date, p.description, p.location, p.duration, p.imageUrl, p.instagramUrl, p.youtubeUrl, p.spotifyUrl, p.status]
+      [
+        p.title, p.speaker, p.speakerTitle || null, p.speakerAvatar || null, 
+        p.company || null, p.date || null, p.description || null, p.location || null, 
+        p.duration || '00:00', p.imageUrl || null, p.instagramUrl || '#', 
+        p.youtubeUrl || '#', p.spotifyUrl || '#', p.status || 'BORRADOR'
+      ]
     );
     await logAction('podcast', result.insertId, 'CREATE', 'admin@inspeaker.com.co', p.title);
     res.json({ id: result.insertId });
@@ -179,12 +183,27 @@ app.post('/api/media/conferences', async (req, res) => {
     const [result] = await pool.execute(
       `INSERT INTO conference_clips (title, speaker, speakerTitle, speakerAvatar, duration, publicado, imageUrl, youtubeUrl, location, description, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [c.title, c.speaker, c.speakerTitle, c.speakerAvatar, c.duration, c.publicado || c.date, c.imageUrl, c.youtubeUrl, c.location, c.description, c.status]
+      [
+        c.title, c.speaker, c.speakerTitle || null, c.speakerAvatar || null, 
+        c.duration || '00:00', c.publicado || c.date || null, c.imageUrl || null, 
+        c.youtubeUrl || '', c.location || null, c.description || null, c.status || 'BORRADOR'
+      ]
     );
+    await logAction('conference', result.insertId, 'CREATE', 'admin@inspeaker.com.co', c.title);
     res.json({ id: result.insertId });
   } catch (err) {
     await handleServerError(req, err);
     res.status(500).json({ error: 'Error al crear el clip de conferencia' });
+  }
+});
+
+app.delete('/api/media/conferences/:id', async (req, res) => {
+  try {
+    await pool.execute('DELETE FROM conference_clips WHERE id = ?', [req.params.id]);
+    res.sendStatus(200);
+  } catch (err) {
+    await handleServerError(req, err, { id: req.params.id });
+    res.status(500).json({ error: 'No se pudo eliminar la conferencia' });
   }
 });
 
