@@ -40,10 +40,8 @@ const getAdjustedDateTime = () => {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 };
 
-// Helper para normalizar valores vacíos a NULL para la base de datos
 const nil = (val) => (val === undefined || val === '' || val === null) ? null : val;
 
-// Centralizador de Logging de Errores
 const handleServerError = async (req, error, contextData = null) => {
   const timestamp = getAdjustedDateTime();
   const endpoint = req.originalUrl;
@@ -126,6 +124,62 @@ app.get('/api/db-status', async (req, res) => {
   }
 });
 
+// --- SPEAKERS API ---
+app.get('/api/speakers', async (req, res) => {
+  try {
+    const [rows] = await pool.execute('SELECT * FROM speakers ORDER BY name ASC');
+    res.json(rows);
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al obtener ponentes' });
+  }
+});
+
+app.post('/api/speakers', async (req, res) => {
+  const s = req.body;
+  const userEmail = s.userEmail || 'admin@inspeaker.com.co';
+  try {
+    const [result] = await pool.execute(
+      'INSERT INTO speakers (name, title, imageUrl, specialties, bio, isVerified) VALUES (?, ?, ?, ?, ?, ?)',
+      [nil(s.name), nil(s.title), nil(s.imageUrl), nil(s.specialties), nil(s.bio), s.isVerified ? 1 : 0]
+    );
+    await logAction('speaker', result.insertId, 'CREATE', userEmail, s.name);
+    res.json({ id: result.insertId });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al crear ponente' });
+  }
+});
+
+app.put('/api/speakers/:id', async (req, res) => {
+  const s = req.body;
+  const { id } = req.params;
+  const userEmail = s.userEmail || 'admin@inspeaker.com.co';
+  try {
+    await pool.execute(
+      'UPDATE speakers SET name=?, title=?, imageUrl=?, specialties=?, bio=?, isVerified=? WHERE id=?',
+      [nil(s.name), nil(s.title), nil(s.imageUrl), nil(s.specialties), nil(s.bio), s.isVerified ? 1 : 0, id]
+    );
+    await logAction('speaker', id, 'UPDATE', userEmail, s.name);
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al actualizar ponente' });
+  }
+});
+
+app.delete('/api/speakers/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.execute('DELETE FROM speakers WHERE id = ?', [id]);
+    await logAction('speaker', id, 'DELETE', 'admin@inspeaker.com.co', 'Eliminación permanente');
+    res.sendStatus(200);
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al eliminar ponente' });
+  }
+});
+
 // --- MEDIAFLOW: PODCASTS ---
 app.get('/api/media/podcasts', async (req, res) => {
   try {
@@ -144,20 +198,10 @@ app.post('/api/media/podcasts', async (req, res) => {
       `INSERT INTO podcasts (title, speaker, speakerTitle, speakerAvatar, company, date, description, location, duration, imageUrl, instagramUrl, youtubeUrl, spotifyUrl, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        nil(p.title), 
-        nil(p.speaker), 
-        nil(p.speakerTitle), 
-        nil(p.speakerAvatar), 
-        nil(p.company), 
-        nil(p.date), 
-        nil(p.description), 
-        nil(p.location), 
-        nil(p.duration) || '00:00', 
-        nil(p.imageUrl), 
-        nil(p.instagramUrl) || '#', 
-        nil(p.youtubeUrl) || '#', 
-        nil(p.spotifyUrl) || '#', 
-        nil(p.status) || 'BORRADOR'
+        nil(p.title), nil(p.speaker), nil(p.speakerTitle), nil(p.speakerAvatar), 
+        nil(p.company), nil(p.date), nil(p.description), nil(p.location), 
+        nil(p.duration) || '00:00', nil(p.imageUrl), nil(p.instagramUrl) || '#', 
+        nil(p.youtubeUrl) || '#', nil(p.spotifyUrl) || '#', nil(p.status) || 'BORRADOR'
       ]
     );
     await logAction('podcast', result.insertId, 'CREATE', 'admin@inspeaker.com.co', p.title);
@@ -216,17 +260,9 @@ app.post('/api/media/conferences', async (req, res) => {
       `INSERT INTO conference_clips (title, speaker, speakerTitle, speakerAvatar, duration, publicado, imageUrl, youtubeUrl, location, description, status) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        nil(c.title), 
-        nil(c.speaker), 
-        nil(c.speakerTitle), 
-        nil(c.speakerAvatar), 
-        nil(c.duration) || '00:00', 
-        nil(c.publicado) || nil(c.date), 
-        nil(c.imageUrl), 
-        nil(c.youtubeUrl) || '', 
-        nil(c.location), 
-        nil(c.description), 
-        nil(c.status) || 'BORRADOR'
+        nil(c.title), nil(c.speaker), nil(c.speakerTitle), nil(c.speakerAvatar), 
+        nil(c.duration) || '00:00', nil(c.publicado) || nil(c.date), nil(c.imageUrl), 
+        nil(c.youtubeUrl) || '', nil(c.location), nil(c.description), nil(c.status) || 'BORRADOR'
       ]
     );
     await logAction('conference', result.insertId, 'CREATE', 'admin@inspeaker.com.co', c.title);
