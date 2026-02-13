@@ -27,7 +27,7 @@ async function initDB() {
     console.log('--- !NSPEAKER REMOTE DATABASE CONNECTED ---');
     connection.release();
   } catch (err) {
-    console.error('ERROR DE CONEXIÓN REMOTA:', err.message);
+    console.error('CRITICAL ERROR: No se pudo establecer conexión remota:', err.message);
   }
 }
 
@@ -36,14 +36,49 @@ const getAdjustedDateTime = () => {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 };
 
-// Helper para auditoría
+// Centralizador de Logging de Errores
+const handleServerError = async (req, error, contextData = null) => {
+  const timestamp = getAdjustedDateTime();
+  const endpoint = req.originalUrl;
+  const method = req.method;
+  const errorMessage = error.message;
+  const stackTrace = error.stack;
+  const requestData = JSON.stringify({
+    body: req.body,
+    params: req.params,
+    query: req.query,
+    context: contextData
+  });
+
+  // Log en Consola (Visible para el admin en terminal)
+  console.error(`\n[ERROR SERVER - ${timestamp}]`);
+  console.error(`Route: ${method} ${endpoint}`);
+  console.error(`Message: ${errorMessage}`);
+  console.error(`Stack: ${stackTrace.split('\n')[1].trim()}`); // Muestra la línea exacta del error
+
+  // Persistir en Base de Datos (Para revisión histórica)
+  try {
+    if (pool) {
+      await pool.execute(
+        'INSERT INTO error_logs (endpoint, method, error_message, stack_trace, request_data) VALUES (?, ?, ?, ?, ?)',
+        [endpoint, method, errorMessage, stackTrace, requestData]
+      );
+    }
+  } catch (dbErr) {
+    console.error('ERROR AL GUARDAR LOG EN DB:', dbErr.message);
+  }
+};
+
+// Helper para auditoría de acciones exitosas
 const logAction = async (type, id, action, email, details) => {
   try {
-    await pool.execute(
-      'INSERT INTO audit_logs (entity_type, entity_id, action, user_email, details) VALUES (?, ?, ?, ?, ?)',
-      [type, String(id), action, email || 'system', details]
-    );
-  } catch (e) { console.error('Audit Error:', e); }
+    if (pool) {
+      await pool.execute(
+        'INSERT INTO audit_logs (entity_type, entity_id, action, user_email, details) VALUES (?, ?, ?, ?, ?)',
+        [type, String(id), action, email || 'system', details]
+      );
+    }
+  } catch (e) { console.error('Audit Log Error:', e.message); }
 };
 
 // --- AUTH API ---
@@ -57,7 +92,10 @@ app.post('/api/login', async (req, res) => {
     } else {
       res.status(401).json({ success: false, error: 'Credenciales inválidas' });
     }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error interno en la autenticación' });
+  }
 });
 
 app.post('/api/register', async (req, res) => {
@@ -69,7 +107,10 @@ app.post('/api/register', async (req, res) => {
     await pool.execute('INSERT INTO users (email, password) VALUES (?, ?)', [email, password]);
     await logAction('user', 'new', 'REGISTER', email, 'Usuario registrado');
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al registrar usuario' });
+  }
 });
 
 // --- STATUS API ---
@@ -78,6 +119,8 @@ app.get('/api/db-status', async (req, res) => {
     await pool.execute('SELECT 1');
     res.json({ connected: true, host: dbConfig.host, latency: '24ms' });
   } catch (err) {
+    // No registramos este en DB para no saturar si hay micro-cortes, solo consola
+    console.warn(`[DB-STATUS] Offline: ${err.message}`);
     res.json({ connected: false });
   }
 });
@@ -87,7 +130,10 @@ app.get('/api/media/podcasts', async (req, res) => {
   try {
     const [rows] = await pool.execute('SELECT * FROM podcasts ORDER BY id DESC');
     res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'No se pudieron cargar los podcasts' });
+  }
 });
 
 app.post('/api/media/podcasts', async (req, res) => {
@@ -100,14 +146,20 @@ app.post('/api/media/podcasts', async (req, res) => {
     );
     await logAction('podcast', result.insertId, 'CREATE', 'admin@inspeaker.com.co', p.title);
     res.json({ id: result.insertId });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al crear el podcast' });
+  }
 });
 
 app.delete('/api/media/podcasts/:id', async (req, res) => {
   try {
     await pool.execute('DELETE FROM podcasts WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { id: req.params.id });
+    res.status(500).json({ error: 'No se pudo eliminar el podcast' });
+  }
 });
 
 // --- MEDIAFLOW: CONFERENCES ---
@@ -115,7 +167,10 @@ app.get('/api/media/conferences', async (req, res) => {
   try {
     const [rows] = await pool.execute('SELECT * FROM conference_clips ORDER BY id DESC');
     res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al obtener conferencias' });
+  }
 });
 
 app.post('/api/media/conferences', async (req, res) => {
@@ -127,7 +182,10 @@ app.post('/api/media/conferences', async (req, res) => {
       [c.title, c.speaker, c.speakerTitle, c.speakerAvatar, c.duration, c.publicado || c.date, c.imageUrl, c.youtubeUrl, c.location, c.description, c.status]
     );
     res.json({ id: result.insertId });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al crear el clip de conferencia' });
+  }
 });
 
 // --- LINKMETRICS AI ---
@@ -145,7 +203,10 @@ app.get('/api/groups', async (req, res) => {
       }))
     }));
     res.json(result);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al sincronizar LinkMetrics AI' });
+  }
 });
 
 app.post('/api/groups', async (req, res) => {
@@ -157,7 +218,10 @@ app.post('/api/groups', async (req, res) => {
       await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [uuidv4(), groupId, `Subgrupo ${i}`, 'admin@inspeaker.com.co']);
     }
     res.json({ id: groupId });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Fallo al crear nueva cultura digital' });
+  }
 });
 
 app.put('/api/groups/:id/status', async (req, res) => {
@@ -166,14 +230,20 @@ app.put('/api/groups/:id/status', async (req, res) => {
   try {
     await pool.execute('UPDATE analytics_groups SET status = ?, publishedAt = ? WHERE id = ?', [status, publishedAt, req.params.id]);
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { targetId: req.params.id });
+    res.status(500).json({ error: 'Error al actualizar estado de publicación' });
+  }
 });
 
 app.delete('/api/groups/:id', async (req, res) => {
   try {
     await pool.execute('DELETE FROM analytics_groups WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { targetId: req.params.id });
+    res.status(500).json({ error: 'No se pudo eliminar la cultura' });
+  }
 });
 
 // --- SUBGROUPS & LINKS ---
@@ -184,7 +254,10 @@ app.post('/api/groups/:groupId/subgroups', async (req, res) => {
       await pool.execute('INSERT INTO analytics_subgroups (id, group_id, name, created_by) VALUES (?, ?, ?, ?)', [uuidv4(), req.params.groupId, name, 'admin@inspeaker.com.co']);
     }
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { groupId: req.params.groupId });
+    res.status(500).json({ error: 'Error al añadir subgrupos' });
+  }
 });
 
 app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
@@ -198,23 +271,32 @@ app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
       );
     }
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { subgroupId: req.params.subgroupId });
+    res.status(500).json({ error: 'Error al generar links inteligentes' });
+  }
 });
 
 app.delete('/api/subgroups/:id', async (req, res) => {
   try {
     await pool.execute('DELETE FROM analytics_subgroups WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { targetId: req.params.id });
+    res.status(500).json({ error: 'Fallo al eliminar subgrupo' });
+  }
 });
 
 app.delete('/api/links/:id', async (req, res) => {
   try {
     await pool.execute('DELETE FROM smart_links WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await handleServerError(req, err, { targetId: req.params.id });
+    res.status(500).json({ error: 'No se pudo borrar el link' });
+  }
 });
 
 initDB();
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`EVVA Backend Running on ${PORT}`));
+app.listen(PORT, () => console.log(`EVVA Backend Running on ${PORT} with Advanced Logging`));
