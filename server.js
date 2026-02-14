@@ -84,6 +84,7 @@ const logAction = async (type, id, action, email, details) => {
 
 // --- AUTH API ---
 app.post('/api/login', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { email, password } = req.body;
   try {
     const [users] = await pool.execute('SELECT email FROM users WHERE email = ? AND password = ?', [email, password]);
@@ -100,6 +101,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.post('/api/register', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { email, password } = req.body;
   try {
     const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
@@ -115,6 +117,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 app.get('/api/db-status', async (req, res) => {
+  if (!pool) return res.json({ connected: false });
   try {
     await pool.execute('SELECT 1');
     res.json({ connected: true, host: dbConfig.host, latency: '24ms' });
@@ -126,6 +129,7 @@ app.get('/api/db-status', async (req, res) => {
 
 // --- SPEAKERS API ---
 app.get('/api/speakers', async (req, res) => {
+  if (!pool) return res.json([]);
   try {
     const [rows] = await pool.execute('SELECT * FROM speakers ORDER BY name ASC');
     res.json(rows);
@@ -136,6 +140,7 @@ app.get('/api/speakers', async (req, res) => {
 });
 
 app.post('/api/speakers', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const s = req.body;
   const userEmail = s.userEmail || 'admin@inspeaker.com.co';
   try {
@@ -152,6 +157,7 @@ app.post('/api/speakers', async (req, res) => {
 });
 
 app.put('/api/speakers/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const s = req.body;
   const { id } = req.params;
   const userEmail = s.userEmail || 'admin@inspeaker.com.co';
@@ -169,6 +175,7 @@ app.put('/api/speakers/:id', async (req, res) => {
 });
 
 app.delete('/api/speakers/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { id } = req.params;
   try {
     await pool.execute('DELETE FROM speakers WHERE id = ?', [id]);
@@ -182,6 +189,7 @@ app.delete('/api/speakers/:id', async (req, res) => {
 
 // --- MEDIAFLOW: PODCASTS ---
 app.get('/api/media/podcasts', async (req, res) => {
+  if (!pool) return res.json([]);
   try {
     const [rows] = await pool.execute('SELECT * FROM podcasts ORDER BY date DESC, id DESC');
     res.json(rows);
@@ -192,6 +200,7 @@ app.get('/api/media/podcasts', async (req, res) => {
 });
 
 app.post('/api/media/podcasts', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const p = req.body;
   try {
     const [result] = await pool.execute(
@@ -213,6 +222,7 @@ app.post('/api/media/podcasts', async (req, res) => {
 });
 
 app.put('/api/media/podcasts/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const p = req.body;
   const { id } = req.params;
   try {
@@ -233,6 +243,7 @@ app.put('/api/media/podcasts/:id', async (req, res) => {
 });
 
 app.delete('/api/media/podcasts/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   try {
     await pool.execute('DELETE FROM podcasts WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
@@ -244,6 +255,7 @@ app.delete('/api/media/podcasts/:id', async (req, res) => {
 
 // --- MEDIAFLOW: CONFERENCES ---
 app.get('/api/media/conferences', async (req, res) => {
+  if (!pool) return res.json([]);
   try {
     const [rows] = await pool.execute('SELECT * FROM conference_clips ORDER BY publicado DESC, id DESC');
     res.json(rows);
@@ -254,6 +266,7 @@ app.get('/api/media/conferences', async (req, res) => {
 });
 
 app.post('/api/media/conferences', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const c = req.body;
   try {
     const [result] = await pool.execute(
@@ -274,6 +287,7 @@ app.post('/api/media/conferences', async (req, res) => {
 });
 
 app.put('/api/media/conferences/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const c = req.body;
   const { id } = req.params;
   try {
@@ -293,6 +307,7 @@ app.put('/api/media/conferences/:id', async (req, res) => {
 });
 
 app.delete('/api/media/conferences/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   try {
     await pool.execute('DELETE FROM conference_clips WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
@@ -304,6 +319,7 @@ app.delete('/api/media/conferences/:id', async (req, res) => {
 
 // --- LINKMETRICS AI ---
 app.get('/api/groups', async (req, res) => {
+  if (!pool) return res.json([]);
   try {
     const [groups] = await pool.execute('SELECT * FROM analytics_groups ORDER BY createdAt DESC');
     const [subgroups] = await pool.execute('SELECT * FROM analytics_subgroups');
@@ -324,6 +340,7 @@ app.get('/api/groups', async (req, res) => {
 });
 
 app.post('/api/groups', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { name, subgroupCount } = req.body;
   const groupId = uuidv4();
   try {
@@ -339,6 +356,7 @@ app.post('/api/groups', async (req, res) => {
 });
 
 app.put('/api/groups/:id/status', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { status } = req.body;
   const publishedAt = status === 'Publicado' ? getAdjustedDateTime() : null;
   try {
@@ -351,6 +369,7 @@ app.put('/api/groups/:id/status', async (req, res) => {
 });
 
 app.delete('/api/groups/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   try {
     await pool.execute('DELETE FROM analytics_groups WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
@@ -362,6 +381,7 @@ app.delete('/api/groups/:id', async (req, res) => {
 
 // --- SUBGROUPS & LINKS ---
 app.post('/api/groups/:groupId/subgroups', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { name, count } = req.body;
   try {
     for (let i = 0; i < count; i++) {
@@ -375,6 +395,7 @@ app.post('/api/groups/:groupId/subgroups', async (req, res) => {
 });
 
 app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { count, expiresAt } = req.body;
   try {
     for (let i = 0; i < count; i++) {
@@ -392,6 +413,7 @@ app.post('/api/subgroups/:subgroupId/links', async (req, res) => {
 });
 
 app.delete('/api/subgroups/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   try {
     await pool.execute('DELETE FROM analytics_subgroups WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
@@ -402,6 +424,7 @@ app.delete('/api/subgroups/:id', async (req, res) => {
 });
 
 app.delete('/api/links/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
   try {
     await pool.execute('DELETE FROM smart_links WHERE id = ?', [req.params.id]);
     res.sendStatus(200);
