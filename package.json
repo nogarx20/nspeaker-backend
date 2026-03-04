@@ -1,14 +1,10 @@
 {
-  "name": "!nspeaker-v3-fullstack",
-  "private": true,
+  "name": "nspeaker-backend",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node server.js",
-    "build": "vite build",
-    "preview": "vite preview",
-    "server": "node server.js",
-    "lint": "tsc --noEmit"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1001.0",
@@ -19,16 +15,6 @@
     "multer": "^2.1.0",
     "multer-s3": "^3.0.1",
     "mysql2": "^3.6.1",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
     "uuid": "^13.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
   }
 }

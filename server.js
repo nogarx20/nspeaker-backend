@@ -8,7 +8,6 @@ import multer from 'multer';
 import { S3Client } from '@aws-sdk/client-s3';
 import multerS3 from 'multer-s3';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
@@ -482,20 +481,7 @@ app.delete('/api/links/:id', async (req, res) => {
 
   initDB();
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    app.use(express.static('dist'));
-    app.get('*', (req, res) => {
-      res.sendFile(path.resolve('dist/index.html'));
-    });
-  }
-
+  
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, '0.0.0.0', () => console.log(`EVVA Backend Running on ${PORT} with Advanced Logging`));
 }
