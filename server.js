@@ -4,12 +4,49 @@ import mysql from 'mysql2/promise';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
+import multer from 'multer';
+import { S3Client } from '@aws-sdk/client-s3';
+import multerS3 from 'multer-s3';
+import path from 'path';
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// --- S3 CONFIGURATION ---
+const s3 = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  },
+});
+
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.AWS_BUCKET_NAME || 'inspeacker',
+    acl: 'public-read',
+    metadata: function (req, file, cb) {
+      cb(null, { fieldName: file.fieldname });
+    },
+    key: function (req, file, cb) {
+      const ext = path.extname(file.originalname);
+      const fileName = `mediaflow/${Date.now()}-${uuidv4()}${ext}`;
+      cb(null, fileName);
+    },
+  }),
+});
+
+// --- UPLOAD API ---
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No se subió ningún archivo' });
+  }
+  res.json({ url: req.file.location });
+});
 
 const dbConfig = {
   host: 'app.sittca.com.co',
@@ -24,6 +61,7 @@ const dbConfig = {
 };
 
 let pool;
+
 async function initDB() {
   try {
     pool = mysql.createPool(dbConfig);
