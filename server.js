@@ -8,45 +8,53 @@ import multer from 'multer';
 import { S3Client } from '@aws-sdk/client-s3';
 import multerS3 from 'multer-s3';
 import path from 'path';
+import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+async function startServer() {
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
 
-// --- S3 CONFIGURATION ---
-const s3 = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-  },
-});
-
-const upload = multer({
-  storage: multerS3({
-    s3: s3,
-    bucket: process.env.AWS_BUCKET_NAME || 'inspeacker',
-    acl: 'public-read',
-    metadata: function (req, file, cb) {
-      cb(null, { fieldName: file.fieldname });
+  // --- S3 CONFIGURATION ---
+  const s3 = new S3Client({
+    region: process.env.AWS_REGION || 'us-east-1',
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
     },
-    key: function (req, file, cb) {
-      const ext = path.extname(file.originalname);
-      const fileName = `mediaflow/${Date.now()}-${uuidv4()}${ext}`;
-      cb(null, fileName);
-    },
-  }),
-});
+  });
 
-// --- UPLOAD API ---
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No se subió ningún archivo' });
-  }
-  res.json({ url: req.file.location });
-});
+  const upload = multer({
+    storage: multerS3({
+      s3: s3,
+      bucket: process.env.AWS_BUCKET_NAME || 'inspeacker',
+      acl: 'public-read',
+      metadata: function (req, file, cb) {
+        cb(null, { fieldName: file.fieldname });
+      },
+      key: function (req, file, cb) {
+        const ext = path.extname(file.originalname);
+        const fileName = `mediaflow/${Date.now()}-${uuidv4()}${ext}`;
+        cb(null, fileName);
+      },
+    }),
+  });
+
+  // --- UPLOAD API ---
+  app.post('/api/upload', (req, res, next) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        console.error('S3 Upload Error:', err);
+        return res.status(500).json({ error: 'Error en la subida a S3', details: err.message });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: 'No se subió ningún archivo' });
+      }
+      res.json({ url: req.file.location });
+    });
+  });
 
 const dbConfig = {
   host: 'app.sittca.com.co',
@@ -472,6 +480,24 @@ app.delete('/api/links/:id', async (req, res) => {
   }
 });
 
-initDB();
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`EVVA Backend Running on ${PORT} with Advanced Logging`));
+  initDB();
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static('dist'));
+    app.get('*', (req, res) => {
+      res.sendFile(path.resolve('dist/index.html'));
+    });
+  }
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, '0.0.0.0', () => console.log(`EVVA Backend Running on ${PORT} with Advanced Logging`));
+}
+
+startServer();
