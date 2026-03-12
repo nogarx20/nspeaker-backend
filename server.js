@@ -5,9 +5,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
-import { S3Client } from '@aws-sdk/client-s3';
+import { S3Client, ObjectCannedACL } from '@aws-sdk/client-s3';
 import multerS3 from 'multer-s3';
 import path from 'path';
+import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
@@ -25,11 +26,13 @@ async function startServer() {
     },
   });
 
+  const bucketName = process.env.AWS_S3_BUCKET_NAME || process.env.AWS_BUCKET_NAME;
+
   const upload = multer({
     storage: multerS3({
       s3: s3,
-      bucket: process.env.AWS_BUCKET_NAME || 'inspeacker',
-      acl: 'public-read',
+      bucket: bucketName || 'inspeacker',
+      acl: ObjectCannedACL.public_read,
       metadata: function (req, file, cb) {
         cb(null, { fieldName: file.fieldname });
       },
@@ -481,7 +484,20 @@ app.delete('/api/links/:id', async (req, res) => {
 
   initDB();
 
-  
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static('dist'));
+    app.get('*', (req, res) => {
+      res.sendFile(path.resolve('dist/index.html'));
+    });
+  }
+
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, '0.0.0.0', () => console.log(`EVVA Backend Running on ${PORT} with Advanced Logging`));
 }
