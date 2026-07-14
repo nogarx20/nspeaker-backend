@@ -235,6 +235,20 @@ app.delete('/api/speakers/:id', async (req, res) => {
   }
 });
 
+// --- EVENTS API ---
+app.get('/api/events', async (req, res) => {
+  if (!pool) return res.json([]);
+  try {
+    const [rows] = await pool.execute('SELECT * FROM events ORDER BY event_date DESC');
+    res.json(rows);
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al obtener eventos' });
+  }
+});
+
+
+
 // --- MEDIAFLOW: PODCASTS ---
 app.get('/api/media/podcasts', async (req, res) => {
   if (!pool) return res.json([]);
@@ -362,6 +376,22 @@ app.delete('/api/media/conferences/:id', async (req, res) => {
   } catch (err) {
     await handleServerError(req, err, { id: req.params.id });
     res.status(500).json({ error: 'No se pudo eliminar la conferencia' });
+  }
+});
+
+// --- EVENT REGISTRATIONS ---
+app.get('/api/events/:id/registrations', async (req, res) => {
+  if (!pool) return res.json([]);
+  const { id } = req.params;
+  try {
+    const [rows] = await pool.execute(
+      'SELECT *, (SELECT name FROM events WHERE id = registrations.event_id) as event_name FROM registrations WHERE event_id = ? ORDER BY created_at DESC', 
+      [id]
+    );
+    res.json(rows);
+  } catch (err) {
+    await handleServerError(req, err, { eventId: id });
+    res.status(500).json({ error: 'Error al obtener las inscripciones del evento' });
   }
 });
 
