@@ -239,7 +239,10 @@ app.delete('/api/speakers/:id', async (req, res) => {
 app.get('/api/events', async (req, res) => {
   if (!pool) return res.json([]);
   try {
-    const [rows] = await pool.execute('SELECT * FROM events ORDER BY event_date DESC');
+    const query = `
+      SELECT e.*, (SELECT COUNT(*) FROM registrations WHERE event_id = e.id AND status = 'confirmed') as registered_attendees
+      FROM events e ORDER BY e.event_date DESC`;
+    const [rows] = await pool.execute(query);
     res.json(rows);
   } catch (err) {
     await handleServerError(req, err);
@@ -392,6 +395,37 @@ app.get('/api/events/:id/registrations', async (req, res) => {
   } catch (err) {
     await handleServerError(req, err, { eventId: id });
     res.status(500).json({ error: 'Error al obtener las inscripciones del evento' });
+  }
+});
+
+app.put('/api/registrations/:id/status', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const { id } = req.params;
+  const { status, userEmail } = req.body;
+  try {
+    await pool.execute(
+      'UPDATE registrations SET status = ? WHERE id = ?',
+      [status, id]
+    );
+    await logAction('registration', id, 'STATUS_CHANGE', userEmail, `Status changed to ${status}`);
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err, { registrationId: id });
+    res.status(500).json({ error: 'Error al actualizar el estado de la inscripción' });
+  }
+});
+
+app.delete('/api/registrations/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const { id } = req.params;
+  const { userEmail } = req.body;
+  try {
+    await pool.execute('DELETE FROM registrations WHERE id = ?', [id]);
+    await logAction('registration', id, 'DELETE', userEmail, 'Inscripción eliminada');
+    res.sendStatus(200);
+  } catch (err) {
+    await handleServerError(req, err, { registrationId: id });
+    res.status(500).json({ error: 'Error al eliminar la inscripción' });
   }
 });
 
