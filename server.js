@@ -240,7 +240,7 @@ app.get('/api/events', async (req, res) => {
   if (!pool) return res.json([]);
   try {
     const query = `
-      SELECT e.*, (SELECT COUNT(*) FROM registrations WHERE event_id = e.id AND status = 'confirmed') as registered_attendees
+      SELECT e.*, (SELECT COUNT(*) FROM registrations WHERE event_id = e.id AND status != 'waitlist') as registered_attendees
       FROM events e ORDER BY e.event_date DESC`;
     const [rows] = await pool.execute(query);
     res.json(rows);
