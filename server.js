@@ -387,11 +387,27 @@ app.get('/api/events/:id/registrations', async (req, res) => {
   if (!pool) return res.json([]);
   const { id } = req.params;
   try {
-    const [rows] = await pool.execute(
+    const [registrations] = await pool.execute(
       'SELECT *, (SELECT name FROM events WHERE id = registrations.event_id) as event_name FROM registrations WHERE event_id = ? ORDER BY created_at DESC', 
       [id]
     );
-    res.json(rows);
+
+    if (registrations.length === 0) {
+      return res.json([]);
+    }
+
+    const registrationIds = registrations.map(r => r.id);
+    const [companions] = await pool.execute(
+      'SELECT * FROM companions WHERE registration_id IN (?)',
+      [registrationIds]
+    );
+
+    const registrationsWithCompanions = registrations.map(reg => ({
+      ...reg,
+      companions: companions.filter(c => c.registration_id === reg.id)
+    }));
+
+    res.json(registrationsWithCompanions);
   } catch (err) {
     await handleServerError(req, err, { eventId: id });
     res.status(500).json({ error: 'Error al obtener las inscripciones del evento' });
