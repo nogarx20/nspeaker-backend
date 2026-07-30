@@ -416,6 +416,24 @@ app.get('/api/events/:id/registrations', async (req, res) => {
   }
 });
 
+app.put('/api/registrations/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const { id } = req.params;
+  const r = req.body;
+  const userEmail = r.userEmail || 'system';
+  try {
+    await pool.execute(
+      'UPDATE registrations SET full_name=?, email=?, phone=?, document_id=?, profession=?, position=?, sector=?, is_entrepreneur=? WHERE id=?',
+      [nil(r.full_name), nil(r.email), nil(r.phone), nil(r.document_id), nil(r.profession), nil(r.position), nil(r.sector), nil(r.is_entrepreneur), id]
+    );
+    await logAction('registration', id, 'UPDATE', userEmail, `Registration updated for ${r.full_name}`);
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err, { registrationId: id });
+    res.status(500).json({ error: 'Error al actualizar la inscripción' });
+  }
+});
+
 app.put('/api/registrations/:id/status', async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'Database initializing' });
   const { id } = req.params;
@@ -444,6 +462,56 @@ app.delete('/api/registrations/:id', async (req, res) => {
   } catch (err) {
     await handleServerError(req, err, { registrationId: id });
     res.status(500).json({ error: 'Error al eliminar la inscripción' });
+  }
+});
+
+// --- COMPANIONS API ---
+app.post('/api/companions', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const c = req.body;
+  const userEmail = c.userEmail || 'system';
+  try {
+    const [result] = await pool.execute(
+      'INSERT INTO companions (registration_id, document_id, full_name, email, phone) VALUES (?, ?, ?, ?, ?)',
+      [c.registration_id, nil(c.document_id), nil(c.full_name), nil(c.email), nil(c.phone)]
+    );
+    await logAction('companion', result.insertId, 'CREATE', userEmail, `Companion ${c.full_name} added`);
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al crear acompañante' });
+  }
+});
+
+app.put('/api/companions/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const { id } = req.params;
+  const c = req.body;
+  const userEmail = c.userEmail || 'system';
+  try {
+    await pool.execute(
+      'UPDATE companions SET document_id=?, full_name=?, email=?, phone=? WHERE id=?',
+      [nil(c.document_id), nil(c.full_name), nil(c.email), nil(c.phone), id]
+    );
+    await logAction('companion', id, 'UPDATE', userEmail, `Companion ${c.full_name} updated`);
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err, { companionId: id });
+    res.status(500).json({ error: 'Error al actualizar acompañante' });
+  }
+});
+
+app.delete('/api/companions/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const { id } = req.params;
+  const { userEmail } = req.body;
+  try {
+    await pool.execute('DELETE FROM companions WHERE id = ?', [id]);
+    await logAction('companion', id, 'DELETE', userEmail, 'Acompañante eliminado');
+    res.sendStatus(200);
+  } catch (err) {
+    await handleServerError(req, err, { companionId: id });
+    res.status(500).json({ error: 'Error al eliminar acompañante' });
   }
 });
 
