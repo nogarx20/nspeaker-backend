@@ -397,10 +397,12 @@ app.get('/api/events/:id/registrations', async (req, res) => {
     }
 
     const registrationIds = registrations.map(r => r.id);
+    console.log('Buscando acompañantes para los IDs de registro:', registrationIds);
     const [companions] = await pool.execute(
       'SELECT * FROM companions WHERE registration_id IN (?)',
-      [registrationIds]
+      [registrationIds] // Corrected to pass the array directly
     );
+    console.log('Resultado de la consulta de acompañantes:', companions);
 
     const registrationsWithCompanions = registrations.map(reg => ({
       ...reg,
