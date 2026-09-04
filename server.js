@@ -77,6 +77,26 @@ async function initDB() {
     pool = mysql.createPool(dbConfig);
     const connection = await pool.getConnection();
     console.log('--- !NSPEAKER REMOTE DATABASE CONNECTED ---');
+    
+    // Asegurar existencia de la tabla testimonial_clips
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS testimonial_clips (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        speaker VARCHAR(255) NULL,
+        speakerTitle VARCHAR(255) NULL,
+        speakerAvatar TEXT NULL,
+        duration VARCHAR(50) NULL,
+        publicado VARCHAR(50) NULL,
+        imageUrl TEXT NULL,
+        youtubeUrl TEXT NULL,
+        location VARCHAR(255) NULL,
+        description TEXT NULL,
+        status ENUM('AL AIRE', 'BORRADOR') DEFAULT 'BORRADOR',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     connection.release();
   } catch (err) {
     console.error('CRITICAL ERROR: No se pudo establecer conexión remota:', err.message);
@@ -379,6 +399,70 @@ app.delete('/api/media/conferences/:id', async (req, res) => {
   } catch (err) {
     await handleServerError(req, err, { id: req.params.id });
     res.status(500).json({ error: 'No se pudo eliminar la conferencia' });
+  }
+});
+
+// --- MEDIAFLOW: TESTIMONIALS ---
+app.get('/api/media/testimonials', async (req, res) => {
+  if (!pool) return res.json([]);
+  try {
+    const [rows] = await pool.execute('SELECT * FROM testimonial_clips ORDER BY publicado DESC, id DESC');
+    res.json(rows);
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al obtener testimonios' });
+  }
+});
+
+app.post('/api/media/testimonials', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const c = req.body;
+  try {
+    const [result] = await pool.execute(
+      `INSERT INTO testimonial_clips (title, speaker, speakerTitle, speakerAvatar, duration, publicado, imageUrl, youtubeUrl, location, description, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        nil(c.title), nil(c.speaker), nil(c.speakerTitle), nil(c.speakerAvatar), 
+        nil(c.duration) || '00:00', nil(c.publicado) || nil(c.date), nil(c.imageUrl), 
+        nil(c.youtubeUrl) || '', nil(c.location), nil(c.description), nil(c.status) || 'BORRADOR'
+      ]
+    );
+    await logAction('testimonial', result.insertId, 'CREATE', 'admin@inspeaker.com.co', c.title);
+    res.json({ id: result.insertId });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al crear el clip de testimonio' });
+  }
+});
+
+app.put('/api/media/testimonials/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  const c = req.body;
+  const { id } = req.params;
+  try {
+    await pool.execute(
+      `UPDATE testimonial_clips SET title=?, speaker=?, speakerTitle=?, speakerAvatar=?, duration=?, publicado=?, imageUrl=?, youtubeUrl=?, location=?, description=?, status=? WHERE id=?`,
+      [
+        nil(c.title), nil(c.speaker), nil(c.speakerTitle), nil(c.speakerAvatar), 
+        nil(c.duration), nil(c.publicado) || nil(c.date), nil(c.imageUrl), 
+        nil(c.youtubeUrl), nil(c.location), nil(c.description), nil(c.status), id
+      ]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    await handleServerError(req, err);
+    res.status(500).json({ error: 'Error al actualizar el testimonio' });
+  }
+});
+
+app.delete('/api/media/testimonials/:id', async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'Database initializing' });
+  try {
+    await pool.execute('DELETE FROM testimonial_clips WHERE id = ?', [req.params.id]);
+    res.sendStatus(200);
+  } catch (err) {
+    await handleServerError(req, err, { id: req.params.id });
+    res.status(500).json({ error: 'No se pudo eliminar el testimonio' });
   }
 });
 
